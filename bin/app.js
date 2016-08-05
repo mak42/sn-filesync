@@ -463,6 +463,18 @@ function processFoundRecords(searchObj, queryObj, records) {
             continue;
         }
 
+        // TODO : looks broken because locDB.fieldSuffix is undefined???
+        var isSCSSRecord = FileRecordUtil.isSCSS(record.recordName);
+        // check that it is really a SCSS file and not a CSS file!
+        if (suffix == 'scss' && !isSCSSRecord) {
+            continue; // skip, avoid duplicates
+        }
+        if (suffix == 'css' && isSCSSRecord) {
+            continue; // skip, avoid duplicates
+        }
+
+
+
         if (config.ensureUniqueNames) {
             suffix = sys_id + '.' + suffix;
         }
