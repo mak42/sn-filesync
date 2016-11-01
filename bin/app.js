@@ -40,21 +40,30 @@ var notifyUserMsg = notifyObj.msg,
     // list of supported notification messages defined in notify.js
     msgCodes = notifyObj.codes;
 
-var DOWNLOAD_OK = 1,
-    DOWNLOAD_FAIL = -1,
-    multiDownloadStatus = DOWNLOAD_OK,
-    SLASH = '/';
+var constants = {
+    chokiWatcherIgnore: '',
+    fullRecordSuffix: 'record.json',
 
+    DOWNLOAD_OK: 1,
+    DOWNLOAD_FAIL: -1,
 
-var isMac = /^darwin/.test(process.platform);
-//var isWin = /^win/.test(process.platform);
+    SLASH: '/'
+
+    //isMac: /^darwin/.test(process.platform)
+    //isWin = /^win/.test(process.platform)
+};
+
+// ignore hidden files/dirs like .sync_data and full records when watching for changes
+constants.chokiWatcherIgnore = [/[\/\\]\./, '**/*' + constants.fullRecordSuffix];
+
+// default to ok.
+var multiDownloadStatus = constants.DOWNLOAD_OK;
 
 var testsRunning = false;
 
 var chokiWatcher = false,
-    chokiWatcherReady = false,
-    // ignore hidden files/dirs like .sync_data when watching for changes
-    chokiWatcherIgnore = /[\/\\]\./; // NOTE: anymatch (micromatch for globs) no longer works with ["**/.*"]
+    chokiWatcherReady = false;
+
 
 var filesInQueueToDownload = 0,
     filesToPreLoad = {};
@@ -72,7 +81,7 @@ function init() {
 
     if (argv.help) {
         displayHelp();
-        process.exit(1);
+        exitApp();
         return;
     }
 
@@ -81,17 +90,18 @@ function init() {
         if (!argv.config) {
             console.log('The config argument must be specified (eg. --config app.config.json)'.red);
             console.log('Run with --help for more info');
-            process.exit(1);
+            exitApp();
         }
         configLoader.setConfigLocation(argv.config);
         config = configLoader.getConfig();
     } catch (e) {
         winston.error('Configuration error:'.red, e.message);
-        process.exit(1);
+        exitApp();
     }
 
-    //config.debug = true;
     setupLogging();
+
+    enrichConfig();
 
     if (config.debug) {
         notifyObj.setDebug();
@@ -99,13 +109,13 @@ function init() {
 
     // Apply custom file watcher ignore rules
     if (config.ignoreFiles) {
-        chokiWatcherIgnore = config.ignoreFiles;
+        constants.chokiWatcherIgnore = config.ignoreFiles;
     }
 
     function start(upgradeBlocks) {
         if (upgradeBlocks) {
             logit.error('Upgrade is needed. Please check the Readme and change logs online.'.red);
-            process.exit(1);
+            exitApp();
         }
 
 
@@ -128,7 +138,7 @@ function init() {
             if (argv.export === true || argv.export.length < 4) {
                 logit.error('Please specify a proper export location.');
                 logit.error('Eg. --export ~/Desktop/config.json');
-                process.exit(1);
+                exitApp();
             }
             exportCurrentSetup(argv.export);
             return;
@@ -186,10 +196,47 @@ function init() {
     upgradeNeeded(config, start);
 }
 
+/**
+ * Exit node app
+ * @param code - optional node system code. Defaults to 1 for normal exit. Any other number means error.
+ */
+function exitApp(code) {
+    code = typeof code == 'undefined' ? 1 : code;
+    process.exit(code);
+}
+
+/**
+ * Add to the config var additional config/options.
+ * Config is shared with all modules so things like constants and loggers
+ * may be needed in other modules.
+ */
+function enrichConfig() {
+    // populate config with constants and depend vars
+    config._fullRecordSuffix = constants.fullRecordSuffix;
+
+    // support for 3rd party logging (eg, FileRecord, notify and Search)
+    config._logger = logit;
+}
+
 function getFolderConfig(folderName) {
     for (var f in config.folders) {
         var folder = config.folders[f];
         if (f == folderName) {
+            return folder;
+        }
+    }
+    return false;
+}
+
+/**
+ * Checks to see if a ServiceNow table/folder config is defined.
+ *
+ * @param tableName {string} - system name of the table
+ */
+function tableDefined(tableName) {
+    for (var f in config.folders) {
+        var folder = config.folders[f];
+        if (folder.table == tableName) {
             return folder;
         }
     }
@@ -260,11 +307,11 @@ function pushUpRecord(argv) {
 
         // do we have a valid file path?
         argv.push = FileRecordUtil.normalisePath(argv.push);
-        if (argv.push.indexOf(SLASH) > 0) {
-            var parts = argv.push.split(SLASH),
+        if (argv.push.indexOf(constants.SLASH) > 0) {
+            var parts = argv.push.split(constants.SLASH),
                 folder = parts[0],
                 file = parts[parts.length - 1],
-                filePath = getFirstRoot() + SLASH + argv.push;
+                filePath = getFirstRoot() + constants.SLASH + argv.push;
 
             logit.info('Will process file "%s" in folder "%s" with push path: %s', file, folder, filePath);
 
@@ -315,14 +362,14 @@ function pullDownRecord(argv) {
     if (isPath) {
         argv.pull = FileRecordUtil.normalisePath(argv.pull);
         // make sure there is a real path provided
-        isPath = argv.pull.indexOf(SLASH) > 0;
+        isPath = argv.pull.indexOf(constants.SLASH) > 0;
     }
 
     if (isPath) {
-        parts = argv.pull.split(SLASH);
+        parts = argv.pull.split(constants.SLASH);
         folder = parts[0];
         file = parts[parts.length - 1];
-        pullPath = getFirstRoot() + SLASH + argv.pull;
+        pullPath = getFirstRoot() + constants.SLASH + argv.pull;
         folderObj = getFolderConfig(folder);
     }
 
@@ -337,7 +384,7 @@ function pullDownRecord(argv) {
 
         if (!folderObj) {
             logit.error('Could not find the mapping for this file: %s', argv.pull);
-            process.exit(0);
+            exitApp(0);
             return;
         }
 
@@ -361,7 +408,7 @@ function pullDownRecord(argv) {
     if (query === '') {
         // a pull without a query makes no sense.
         logit.error('No valid pull query specified.');
-        process.exit(0);
+        exitApp(0);
         return;
     }
 
@@ -377,6 +424,28 @@ function pullDownRecord(argv) {
     });
 }
 
+/*
+ * Entry point to trigger a search on the instance.
+ * If valid parameters are not found then the demo search will run.
+ *
+ * Supported search scenarios
+ * --search --search_query "name=JSUtil" --search_table "sys_script_include" --full_record
+ * --search --search_query "name=JSUtil" --search_table "sys_script_include"
+ *
+ * Search for records on any table (regardless of existing folder/config defintion).
+ * If the folder config does not exist then only the full record will be downloaded
+ * --search --search_table=sys_update_xml --search_query=target_nameLIKECustomer --records_per_search 10
+ * --search --search_table=sys_script --search_query=nameLIKEincident --records_per_search 10
+ *
+ * --search sys_update_xml_2600fd0047202200ff95502b9f9a712a
+ * --search mine
+ * --search (triggers demo search)
+ *
+ * Search for a list of records (experiemental)
+ * --search source.txt
+ *
+ * @param argv {object} = options for searching (see README)
+ */
 function startSearch(argv) {
 
     var queryObj = {
@@ -386,14 +455,23 @@ function startSearch(argv) {
         rows: argv.records_per_search || false,
         fullRecord: argv.full_record || false,
         recordOnly: argv.record_only || false,
-        restrictFields: argv.fields || false
+
+        // the "fields" attirbute should not be used by end users on the command line
+        restrictFields: argv.fields || false,
+        ignoreTableConfig: argv.ignoreTableConfig || false
     };
 
+    if(queryObj.restrictFields != false) {
+        queryObj.restrictFields = queryObj.restrictFields.split(',');
+    }
+
+
+    var searchValue = argv.search && argv.search.length > 0;
     // is the search already defined in the config file?
-    var definedSearch = argv.search && argv.search.length > 0 && config.search[argv.search];
+    var configDefinedSearch = searchValue && config.search[argv.search];
 
     // support search via config file
-    if (definedSearch) {
+    if (configDefinedSearch) {
         var searchObj = config.search[argv.search];
         // what is specified in config file overrides cmd line options
         // this encourages re-usable config and reduces human error with the cmd line
@@ -408,13 +486,108 @@ function startSearch(argv) {
             // implied logic
             queryObj.fullRecord = true;
         }
-    } else if (argv.pull || argv.push) {
-        // these are specifc pull and push requests
-    } else {
-        logit.info('Note: demo mode active as no defined search in your config file was found/specified.'.yellow);
+    } else if (queryObj.table !== '' && queryObj.query !== '') {
+
+        // if table can't be mapped then ignore the table config
+        if (!tableDefined(queryObj.table)) {
+            queryObj.ignoreTableConfig = true;
+        }
+
+    // experiemental
+    } else if (searchValue && argv.search.indexOf('.txt') > 0) {
+        // TODO: try to process a file
+
+
+        readFile(argv.search, function (data) {
+            getRecords(data.split("\n"), queryObj);
+        });
+
+        return;
+
+    } else if(searchValue) {
+        // assume format is table_sys_id (eg. sys_script_fix_e9f4193347302200ff95502b9f9a7176)
+
+        // try to guess from provided param
+        var sys_id = extractSysIdFromName(argv.search);
+        var table = '';
+        if (sys_id) {
+            // try to get table
+            table = argv.search.replace('_' + sys_id, '');
+            if (table.length > 2 && table != sys_id) {
+                // real table!
+                queryObj.query = 'sys_id=' + sys_id;
+                queryObj.table = table;
+                queryObj.rows = 1;
+                queryObj.fullRecord = true;
+
+                // if table can't be mapped then ignore the table config
+                if (!tableDefined(queryObj.table)) {
+                    queryObj.ignoreTableConfig = true;
+                }
+            }
+        }
+    }
+
+    if (queryObj.ignoreTableConfig) {
+        // we won't have fields to search so get full record
+        queryObj.fullRecord = true;
+    }
+
+    // default to a demo search if no valid search query can be built
+    if (!(configDefinedSearch || searchValue) && (queryObj.table === '' || queryObj.query === '')) {
+        logit.info('Note: demo mode active as search provided has no valid table or query. See README search section for support.'.yellow);
         queryObj.demo = true;
     }
 
+    logit.info('Performing search'.green);
+    logit.info(queryObj);
+
+    logit.info("Note: only the first root defined is supported for searching.\n".yellow);
+    var firstRoot = getFirstRoot(),
+        snc = getSncClient(firstRoot); // support first root for now
+
+    var s = new Search(config, snc);
+    s.getResults(queryObj, processFoundRecords);
+}
+
+/**
+ * Given a string with a table and sys_id in it, build the query needed to search after it
+ *
+ * @param str (String) - eg. sys_script_fix_e9f4193347302200ff95502b9f9a7176
+ * @param queryObj (Obj) - config for search
+ */
+function buildQueryForSearch(str, queryObj) {
+    var sys_id = extractSysIdFromName(str);
+    var table = '';
+    if (sys_id) {
+        // try to get table
+        table = str.replace('_' + sys_id, '');
+        if (table.length > 2 && table != sys_id) {
+            // real table!
+            queryObj.query = 'sys_id=' + sys_id;
+            queryObj.table = table;
+            queryObj.rows = 1;
+            queryObj.fullRecord = true;
+
+            // if table can't be mapped then ignore the table config
+            if (!tableDefined(queryObj.table)) {
+                queryObj.ignoreTableConfig = true;
+            }
+        }
+    }
+}
+
+/**
+ * Trigger a search based on an array of identifying strings.
+ *
+ * @param arr {array} - list of strings in format "<table>_<sys_id>"
+ * @param queryObj - search criteria object
+ */
+function getRecords(arr, queryObj) {
+
+    console.log(arr);
+
+    buildQueryForSearch(arr[0], queryObj);
 
     logit.info('Performing search'.green);
     logit.info(queryObj);
@@ -446,16 +619,24 @@ function processFoundRecords(searchObj, queryObj, records) {
     for (var i in records) {
         var record = records[i],
             validData,
-            validResponse = typeof record.recordData != 'undefined',
-            fileSystemSafeName = normaliseRecordName(record.recordName),
-            filePath = basePath + SLASH + record.folder + SLASH,
+            validResponse = typeof record.recordData != 'undefined';
+
+        if (queryObj.ignoreTableConfig) {
+            // set default required options if not using config
+            record.recordName = record.recordData.sys_id;
+            record.folder = queryObj.table;
+        }
+
+        var fileSystemSafeName = normaliseRecordName(record.recordName),
+            filePath = basePath + constants.SLASH + record.folder + constants.SLASH,
             suffix = record.fieldSuffix,
-            sys_id = '';
+            sys_id = '',
+            bestGuessName = filePath + ' .... ' + fileSystemSafeName;
 
         if (validResponse) {
             sys_id = record.recordData.sys_id || record.sys_id;
         } else {
-            var bestGuessName = filePath + ' .... ' + fileSystemSafeName;
+
             // seems like protected records that are read-only hide certain fields from view
             logit.warn('Found but will ignore to protected record: ' + bestGuessName);
             totalErrors++;
@@ -466,23 +647,20 @@ function processFoundRecords(searchObj, queryObj, records) {
         // TODO : looks broken because locDB.fieldSuffix is undefined???
         var isSCSSRecord = FileRecordUtil.isSCSS(record.recordName);
         // check that it is really a SCSS file and not a CSS file!
-        if (suffix == 'scss' && !isSCSSRecord) {
+        if (suffix == 'scss' && !isSCSSRecord || suffix == 'css' && isSCSSRecord) {
+            logit.info('Avoiding duplicate CSS/SCSS files: ' + bestGuessName);
             continue; // skip, avoid duplicates
         }
-        if (suffix == 'css' && isSCSSRecord) {
-            continue; // skip, avoid duplicates
-        }
-
-
 
         if (config.ensureUniqueNames) {
+            // TODO : these records will be <name>.sys_id.record.json but others are <name>_record.json
             suffix = sys_id + '.' + suffix;
         }
 
         var fileName = fileSystemSafeName + '.' + suffix;
 
         if (record.subDir !== '') {
-            filePath += record.subDir + SLASH;
+            filePath += record.subDir + constants.SLASH;
         }
         filePath += fileName;
 
@@ -514,7 +692,7 @@ function processFoundRecords(searchObj, queryObj, records) {
         if (totalErrors > 0) {
             logit.warn("Finished searching for files. %s file(s) will not be saved: \n%s", totalErrors, failedFiles.join("\n"));
         }
-        process.exit(1);
+        exitApp();
     }
 
 
@@ -581,7 +759,7 @@ function processFoundRecords(searchObj, queryObj, records) {
         } else {
             logit.info('Finished creating %d files.', totalSaves);
         }
-        process.exit(1);
+        exitApp();
     }
 }
 
@@ -741,7 +919,7 @@ function exportCurrentSetup(exportConfigPath) {
     var chokiWatcher = chokidar.watch(watchedFolders, {
             persistent: true,
             // ignores use anymatch (https://github.com/es128/anymatch)
-            ignored: chokiWatcherIgnore
+            ignored: constants.chokiWatcherIgnore
         })
         .on('add', function (file, stats) {
             // add all files that have content..
@@ -771,7 +949,7 @@ function exportCurrentSetup(exportConfigPath) {
                     logit.info('Export complete'.green);
                     logit.info('Export location: %s'.green, exportConfigPath);
                 }
-                process.exit(1);
+                exitApp();
             });
 
         });
@@ -793,7 +971,7 @@ function queuedFile() {
     if (filesInQueueToDownload > 2 && notifyEnabled) {
         notifyEnabled = false;
         // reset multi file download status to OK.
-        multiDownloadStatus = DOWNLOAD_OK;
+        multiDownloadStatus = constants.DOWNLOAD_OK;
     }
 }
 
@@ -810,7 +988,7 @@ function decrementQueue() {
         if (!notifyEnabled) {
             notifyEnabled = true;
             // show one notification to represent if all files were downloaded or not
-            if (multiDownloadStatus == DOWNLOAD_FAIL) {
+            if (multiDownloadStatus == constants.DOWNLOAD_FAIL) {
                 logit.error('Some or all files failed to download'.red);
                 notifyUser(msgCodes.COMPLEX_ERROR);
             } else {
@@ -819,7 +997,7 @@ function decrementQueue() {
         }
 
         if (endApp) {
-            process.exit(1);
+            exitApp();
             return;
         }
 
@@ -1018,7 +1196,7 @@ function readFile(file, callback) {
     fs.readFile(file, 'utf8', function (err, data) {
         if (err) {
             notifyUser(msgCodes.COMPLEX_ERROR);
-            logit.info(('Error trying to read file: '.red) + file);
+            logit.error(('Error trying to read file: '.red) + file);
             handleError(err, {
                 file: file
             });
@@ -1141,7 +1319,7 @@ function addFile(file, callback) {
     callback = callback || function (complete) {
         if (!complete) {
             logit.info(('Could not add file:  ' + file).red);
-            multiDownloadStatus = DOWNLOAD_FAIL;
+            multiDownloadStatus = constants.DOWNLOAD_FAIL;
         }
     };
 
@@ -1281,7 +1459,8 @@ function watchFolders() {
     chokiWatcher = chokidar.watch(watchedFolders, {
             persistent: true,
             // ignores use anymatch (https://github.com/es128/anymatch)
-            ignored: chokiWatcherIgnore,
+            ignored: constants.chokiWatcherIgnore,
+
             // performance hit?
             alwaysStat: true
         })
@@ -1373,7 +1552,6 @@ function setupLogging() {
         for (var i = 1; i < arguments.length; i++) {
             this.info(' - ', arguments[i]);
         }
-        //console.log('...............');
     };
 
     logger.extend(logit);
@@ -1382,8 +1560,6 @@ function setupLogging() {
         logger.level = 'debug';
     }
 
-    // support for 3rd party logging (eg, FileRecord, notify and Search)
-    config._logger = logit;
 }
 
 

@@ -1,4 +1,4 @@
-sn-filesync -- ServiceNow FileSync (v4.2.1)
+sn-filesync -- ServiceNow FileSync (v4.2.2)
 =================
 
 [![NPM](https://nodei.co/npm-dl/sn-filesync.png?height=3&months=9)](https://nodei.co/npm-dl/sn-filesync/)
@@ -25,7 +25,7 @@ sn-filesync -- ServiceNow FileSync (v4.2.1)
    * [Search Usage](#search-usage)
    * [Search Command Line Usage](#search-command-line-usage)
    * [Tips for Searching](#tips-for-searching)
- * [Pull and Push Commands] (#pull-and-push-commands)
+ * [Pull and Push Commands](#pull-and-push-commands)
  * [Road Map](#road-map)
  * [Contribution workflow](#contribution-workflow)
  * [Contributors are awesome](#contributors-are-awesome)
@@ -364,9 +364,16 @@ The search feature supports 3 activites:
 
 Additionally it's possible to set the max amount of records returned per search (instance default is normally 10,000) and specify a specific table to search on (so long as it's mapped in your *folders* config).
 
+Pro users will find search especially useful with to always get the latest versions of records from their instance. There are also many advanced options for searching. See below for examples.
+
 ### Search Usage
 
-The search component enforces using the config file instead of the command line to define the search criteria. This helps by saving commonly used search settings. Below is a sample configuration that also exists in the default config file. Note that the query used is exactly the same as the **sysparm_query** used when filtering list views or when working with **encoded queries**.
+There are 2 ways to define a search.
+
+1. Via the config.json file.
+1. On the command line using various options.
+
+The search component enforces encourages using the config file instead of the command line to define the search criteria. This helps by saving commonly used search settings. Below is a sample configuration that also exists in the default config file. Note that the query used is exactly the same as the **sysparm_query** used when filtering list views or when working with **encoded queries**.
 
 ```javascript
 
@@ -423,6 +430,19 @@ The search component enforces using the config file instead of the command line 
  ```
  node bin/app.js --config ~/my-conf.json --search mine --download --full_record --record_only
  ```
+ * Download a specific record:
+ ```
+ node bin/app.js --config ~/my-conf.json --search sys_script_include_2600fd0047202200ff95502b9f9a712a
+ ```
+ ```
+node bin/app.js --config ~/my-conf.json - --search_query "name=JSUtil" --search_table "sys_script_include"
+ ```
+ * Search for records on a specific table (even if not defined in config):
+ ```
+node bin/app.js --config ~/my-conf.json --search_table=sys_update_xml --search_query=target_nameLIKECustomer --records_per_search 10
+ ```
+
+
 
 Note that the defaults are to search in demo mode without downloading any records.
 
@@ -436,7 +456,7 @@ Search unlocks a great deal of potential. Here are some ideas showing how you ca
  * Run your own health report. Download all fields of interest and then run your own RegEx queries to look for configuration issues.
 * Quickly and easily take over from a colleague. If they are going on holiday then just download the records they worked on recently and not worry about them forgetting to tell you where the important stuff is!
 * Export all description content or story content or ANY attribute from any table in bulk. Could identify documentation issues.
- * Export entire records but only the fields of interest. Eg, description field, script field, last modification date etc.
+ * Export individual fields of interest from a table. Eg, description field, script field, last modification date etc.
 
 ## Pull and Push Commands
 

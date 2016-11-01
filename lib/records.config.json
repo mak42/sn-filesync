@@ -130,6 +130,25 @@
             "fields": {
                 "js": "script"
             }
+        },
+        "web_service_resources": {
+            "table": "sys_ws_operation",
+            "key": "name",
+            "fields": {
+                "js": "operation_script"
+            },
+            "subDirPattern": "web_service_definition"
+        },
+        "widgets": {
+            "table": "sp_widget",
+            "key": "name",
+            "fields": {
+                "client.js": "client_script",
+                "demo.js": "demo_data",
+                "server.js": "script",
+                "html": "template",
+                "scss": "scss"
+            }
         }
     }
 }

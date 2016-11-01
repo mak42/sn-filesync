@@ -1,7 +1,13 @@
 # FileSync Changes
 
+* 2016-11-01 (**Version 4.2.2**)
+ * Add new search feature allowing easier downloading of single records
+   * Eg. `node bin/app.js --config config.json --search sys_script_2600fd0047202200ff95502b9f9a712a`
+ * Major search refactors
+ * Add new folder mappings
+
 * 2016-07-30 (**Version 4.2.1**)
- * Refactor community fix to reduce duplicate checks. Ensures only valid responses and records are processed in search.
+ * Refactor community fix to reduce duplicate checks. Ensures only valid responses and records are processed in search
 
 * 2016-07-17 (**Version 4.2.0**)
  * Massive README updates
