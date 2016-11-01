@@ -302,6 +302,7 @@ node bin/app.js --config <config to use> --export <new config file>
 ````
 
 Eg.
+
 ````
 node bin/app.js --config ~/.filesync/app.config-acme.json --export ~/Desktop/acme.config.json
 ````
@@ -411,35 +412,49 @@ The search component enforces encourages using the config file instead of the co
 ### Search Command Line Usage
 
  * Test the search system in demo mode:
+
  ```
  node bin/app.js --config ~/my-conf.json --search
  ```
+
  * Search based on a pre-defined search config (defined in *my-conf.json*):
+
  ```
  node bin/app.js --config ~/my-conf.json --search mine
  ```
+
  * Download records found via search (overwrites existing local files if they exist):
+
  ```
  node bin/app.js --config ~/my-conf.json --search mine --download
  ```
+
  * Additionally download the full record as JSON:
+
  ```
  node bin/app.js --config ~/my-conf.json --search mine --download --full_record
  ```
-  * Download only the full record as JSON:
+
+ * Download only the full record as JSON:
+
  ```
  node bin/app.js --config ~/my-conf.json --search mine --download --full_record --record_only
  ```
+
  * Download a specific record:
+
  ```
  node bin/app.js --config ~/my-conf.json --search sys_script_include_2600fd0047202200ff95502b9f9a712a
  ```
+
  ```
-node bin/app.js --config ~/my-conf.json - --search_query "name=JSUtil" --search_table "sys_script_include"
+ node bin/app.js --config ~/my-conf.json - --search_query "name=JSUtil" --search_table "sys_script_include"
  ```
+
  * Search for records on a specific table (even if not defined in config):
+
  ```
-node bin/app.js --config ~/my-conf.json --search_table=sys_update_xml --search_query=target_nameLIKECustomer --records_per_search 10
+ node bin/app.js --config ~/my-conf.json --search_table=sys_update_xml --search_query=target_nameLIKECustomer --records_per_search 10
  ```
 
 
@@ -467,30 +482,39 @@ Note that the default functionality for a pull is to download the file unlike wh
 ### Pull Examples:
 
  * Pull record via sys_id:
-```
-node bin/app.js --config ~/my-conf.json --pull "b1b390890a0a0b1e00f6ae8a31ee2697" --table sys_ui_page
-```
+
+ ```
+ node bin/app.js --config ~/my-conf.json --pull "b1b390890a0a0b1e00f6ae8a31ee2697" --table sys_ui_page
+ ```
+
  * Pull record via sys_id (slightly slower search via all tables):
-```
-node bin/app.js --config ~/my-conf.json --pull "b1b390890a0a0b1e00f6ae8a31ee2697"
-```
+
+ ```
+ node bin/app.js --config ~/my-conf.json --pull "b1b390890a0a0b1e00f6ae8a31ee2697"
+ ```
+
  * Pull all defined fields for a record from a file path:
+
  ```
-node bin/app.js --config ~/my-conf.json --pull "ui_pages/attachment"
+ node bin/app.js --config ~/my-conf.json --pull "ui_pages/attachment"
  ```
+
  * Pull a specific field for a record from a file path:
+
  ```
-node bin/app.js --config ~/my-conf.json --pull "ui_pages/attachment.xhtml"
+ node bin/app.js --config ~/my-conf.json --pull "ui_pages/attachment.xhtml"
  ```
 
  * Pull record via search query:
+
  ```
-node bin/app.js --config ~/my-conf.json --pull --search_query "name=attachment" --table sys_ui_page
+ node bin/app.js --config ~/my-conf.json --pull --search_query "name=attachment" --table sys_ui_page
  ```
 
  * Pull record via search query and save full record as JSON:
+
  ```
-node bin/app.js --config ~/my-conf.json --pull --search_query "name=attachment" --table sys_ui_page --full_record
+ node bin/app.js --config ~/my-conf.json --pull --search_query "name=attachment" --table sys_ui_page --full_record
  ```
 
 
@@ -499,11 +523,13 @@ node bin/app.js --config ~/my-conf.json --pull --search_query "name=attachment" 
 Push always ensures that records are in sync to avoid conflicts.
 
  * Push a field value to the instance
+
  ```
  node bin/app.js --config ~/my-conf.json --push "ui_pages/attachment.xhtml"
  ```
 
 * Push a field value to the instance (nested paths are supported!)
+
  ```
  node bin/app.js --config ~/my-conf.json --push "business_rules/incident/before/insert_incident.js"
  ```
@@ -590,7 +616,7 @@ Below is a summary of windows support
 Feature | Windows | Mac
 ------------ | ------------ | -------------
 Notifications | Windows OS Bubble notifications | Y
-Home dir config | Not tested | Y
-Exporting current setup | Not tested | Y
+Home dir config | Y | Y
+Exporting current setup | Y | Y
 CSS SASS support | Not tested | Y
 Search | Y | Y
