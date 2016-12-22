@@ -243,6 +243,56 @@ function tableDefined(tableName) {
     return false;
 }
 
+function extractTableFromName(str) {
+    var table = '';
+    var start, end;
+
+    // this is the most complex case so handle it first
+    if (str.indexOf('uri=') >= 0) {
+        /*
+         * Example
+         * http://localhost:16008/nav_to.do?uri=%2Fsp_widget.do%3Fsys_id%3Df37aa302cb70020000f8d856634c9cfc%26sysparm_record_target%3Dsp_widget
+         *
+         */
+        start = str.replace('_list', '').split('.do%3F');
+        end = start[0].split('uri=%2F');
+        table = end.pop();
+
+    } else if (str.indexOf('.do') >= 0) {
+        /*
+         * Example
+         * http://localhost:16008/sp_widget.do?sys_id=c6545050ff223100ba13ffffffffffe8&sysparm_record_target=sp_widget
+         *
+         */
+        start = str.split('.do');
+        end = start[0].split('/');
+        table = end.pop();
+
+    } else {
+        /*
+         * Example
+         * sp_widget_c6545050ff223100ba13ffffffffffe8
+         */
+        var sys_id = extractSysIdFromName(str);
+        table = argv.search.replace('_' + sys_id, '');
+    }
+
+    return table;
+}
+
+/**
+ * Returns the last part of the string counting backwards from
+ * end to (end - num)
+ */
+function lastChars(s, num) {
+    var rev = reverse(s);
+    return reverse(rev.substring(0, num));
+}
+
+function reverse(s) {
+    return s.split('').reverse().join('');
+}
+
 function extractSysIdFromName(str) {
     var regEx = new RegExp("[a-z0-9]{32,}", "gi"),
         matches;
@@ -254,7 +304,11 @@ function extractSysIdFromName(str) {
 
     if (matches && matches.length > 0) {
         // assumes only one sys_id str
-        return matches[0];
+        var match = matches[0];
+        // let's make sure we didn't match to much crud at the start.
+        match = lastChars(match, 32);
+
+        return match;
     }
 
     return false;
@@ -461,7 +515,7 @@ function startSearch(argv) {
         ignoreTableConfig: argv.ignoreTableConfig || false
     };
 
-    if(queryObj.restrictFields != false) {
+    if (queryObj.restrictFields !== false) {
         queryObj.restrictFields = queryObj.restrictFields.split(',');
     }
 
@@ -493,7 +547,7 @@ function startSearch(argv) {
             queryObj.ignoreTableConfig = true;
         }
 
-    // experiemental
+        // experiemental
     } else if (searchValue && argv.search.indexOf('.txt') > 0) {
         // TODO: try to process a file
 
@@ -504,15 +558,16 @@ function startSearch(argv) {
 
         return;
 
-    } else if(searchValue) {
-        // assume format is table_sys_id (eg. sys_script_fix_e9f4193347302200ff95502b9f9a7176)
+    } else if (searchValue) {
+        // format could be table_sys_id (eg. sys_script_fix_e9f4193347302200ff95502b9f9a7176)
+        // could also be a long url
 
         // try to guess from provided param
         var sys_id = extractSysIdFromName(argv.search);
         var table = '';
         if (sys_id) {
             // try to get table
-            table = argv.search.replace('_' + sys_id, '');
+            table = extractTableFromName(argv.search);
             if (table.length > 2 && table != sys_id) {
                 // real table!
                 queryObj.query = 'sys_id=' + sys_id;
@@ -631,7 +686,7 @@ function processFoundRecords(searchObj, queryObj, records) {
             filePath = basePath + constants.SLASH + record.folder + constants.SLASH,
             suffix = record.fieldSuffix,
             sys_id = '',
-            bestGuessName = filePath + ' .... ' + fileSystemSafeName;
+            bestGuessName = filePath + ' .... ' + fileSystemSafeName + '.' + suffix;
 
         if (validResponse) {
             sys_id = record.recordData.sys_id || record.sys_id;
@@ -644,13 +699,19 @@ function processFoundRecords(searchObj, queryObj, records) {
             continue;
         }
 
+
+
         // TODO : looks broken because locDB.fieldSuffix is undefined???
+        //        also broken if SN uses scss (sp_widget.css field is scss enabled)
+        //        work around for now is to configure folder definitions to save as ".css" files
         var isSCSSRecord = FileRecordUtil.isSCSS(record.recordName);
         // check that it is really a SCSS file and not a CSS file!
         if (suffix == 'scss' && !isSCSSRecord || suffix == 'css' && isSCSSRecord) {
             logit.info('Avoiding duplicate CSS/SCSS files: ' + bestGuessName);
             continue; // skip, avoid duplicates
         }
+
+
 
         if (config.ensureUniqueNames) {
             // TODO : these records will be <name>.sys_id.record.json but others are <name>_record.json

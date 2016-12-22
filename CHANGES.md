@@ -1,5 +1,8 @@
 # FileSync Changes
 
+* 2016-12-22 (**Version 4.2.3**)
+ * Support searching for and downloading records via a URL as search criteria
+
 * 2016-11-01 (**Version 4.2.2**)
  * Add new search feature allowing easier downloading of single records
    * Eg. `node bin/app.js --config config.json --search sys_script_2600fd0047202200ff95502b9f9a712a`

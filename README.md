@@ -448,8 +448,19 @@ The search component enforces encourages using the config file instead of the co
  ```
 
  ```
- node bin/app.js --config ~/my-conf.json - --search_query "name=JSUtil" --search_table "sys_script_include"
+ node bin/app.js --config ~/my-conf.json --search_query "name=JSUtil" --search_table "sys_script_include"
  ```
+
+* Download a specific record via a URL (note the use of **double quotes**):
+
+ ```
+ node bin/app.js --config ~/my-conf.json --search "https://domain/nav_to.do?uri=%2Fsp_widget.do%3Fsys_id%3Df37aa302cb70020000f8d856634c9cfc%26sysparm_record_target%3Dsp_widget...."
+ ```
+
+ ```
+ node bin/app.js --config ~/my-conf.json --search "https://domain/sp_widget.do?sys_id=c6545050ff223100ba13ffffffffffe8&sysparm_record_target=sp_widget...."
+ ```
+
 
  * Search for records on a specific table (even if not defined in config):
 
