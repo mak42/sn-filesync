@@ -28,7 +28,8 @@ var configLoader = require('../lib/config'),
     runTests = require('../lib/tests'),
     FileRecordUtil = require('../lib/file-record'),
     FileRecord = FileRecordUtil.FileRecord,
-    makeHash = FileRecordUtil.makeHash;
+    makeHash = FileRecordUtil.makeHash,
+    listOfFailedFiles = [];
 
 // our wrapper for winston used for logging
 var logit = {};
@@ -86,6 +87,9 @@ function init() {
         }
         configLoader.setConfigLocation(argv.config);
         config = configLoader.getConfig();
+        if(config.diff) {
+            myDiff.setDiffCommand(config.diff);
+        }
     } catch (e) {
         winston.error('Configuration error:'.red, e.message);
         exitApp();
