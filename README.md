@@ -20,6 +20,7 @@ sn-filesync -- ServiceNow FileSync (v4.2.4)
      * [Root specific options](#root-specific-options)
    * [Exporting current setup](#exporting-current-setup)
    * [SASS CSS pre-compiler support](#sass-css-pre-compiler-support)
+   * [Diff tool](#diff-tool)
  * [Search and download](#search-and-download)
    * [Search Overview](#search-overview)
    * [Search Usage](#search-usage)
@@ -353,6 +354,36 @@ sass_dir = "../records/theme_sass"
 On the instance you then simply create 2 themes. One that is used by your CMS (where "style_sheets" are uploaded to) and another that is used for development (where "theme_sass" SCSS files are uploaded). We start watching for SASS changes using the command: "`compass watch /project/compass`" and when compass outputs the new files they will be detected by FileSync and uploaded (including the SCSS files that have changed).
 
 Using this setup ensures that the customer will have all the files needed to do further development in case they want to use SASS or plain CSS files. If another developer wanted to work on the theme but didn't have compass/SASS configured then they could use an extra CSS record/file.
+
+### Diff Tool
+
+There is an inbuilt diff tool when attempting a push to the service now instance. If you or anyone else has made changes then you will have the choice to override the instances version, override the local version, resolve conflicts or abort the push.
+
+The default tool for solving conflicts will place diff markers in the local file, and leave it to the user to resolve the issue manually.
+
+#### Custom tooling
+
+You can configure your own diff tool if it is usable from the command line. An example for using VSCodes inbuilt diff tool shown below:
+
+```#JSON
+    "diff": {
+        "command": "code -w --diff {0} {1}",
+        "isSync": true
+    }
+```
+
+##### Command
+
+The command section is a bash command which can be passed 2 files through the options {0} and {1}.
+
+0. The servers version of the file
+1. The local version of the file
+
+##### isSync
+
+When true, this allows the diffs temporary files to be cleaned up automatically. It is required that the command section be synchronous, and not return until the diff has been complete (as specified by the -w command in the example above).
+
+If not synchronous we dont have a way to know when the diff is complete so it will not clean up after itself.
 
 ## Search and Download
 
