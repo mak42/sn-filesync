@@ -49,9 +49,5 @@
 
     "ensureUniqueNames": false,
     "ignoreDefaultFolders": false,
-    "debug": false,
-    "diff": {
-        "command": "code -w --diff {0} {1}",
-        "isSync": true
-    }
+    "debug": false
 }
