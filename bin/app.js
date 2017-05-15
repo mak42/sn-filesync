@@ -4,7 +4,6 @@
 // 3rd party modules
 
 var argv = require('minimist')(process.argv.slice(2));
-//console.dir(argv);
 
 var chokidar = require('chokidar');
 require('colors');
@@ -15,6 +14,7 @@ var crypto = require('crypto');
 var glob = require("glob");
 var winston = require('winston');
 var moment = require('moment');
+var myDiff = require('../lib/diff');
 
 // ---------------------------------------------------
 // custom imports
@@ -28,42 +28,35 @@ var configLoader = require('../lib/config'),
     runTests = require('../lib/tests'),
     FileRecordUtil = require('../lib/file-record'),
     FileRecord = FileRecordUtil.FileRecord,
-    makeHash = FileRecordUtil.makeHash;
+    makeHash = FileRecordUtil.makeHash,
+    listOfFailedFiles = [];
 
 // our wrapper for winston used for logging
 var logit = {};
 
 // custom vars
 var notifyObj = notify();
-var notifyUserMsg = notifyObj.msg,
-    notifyEnabled = true,
-    // list of supported notification messages defined in notify.js
-    msgCodes = notifyObj.codes;
+notifyObj.enabled = true;
 
-var constants = {
-    chokiWatcherIgnore: '',
-    fullRecordSuffix: 'record.json',
+var inquireImport = require('../lib/inquire');
+var inquire = new inquireImport(myDiff, logit, notifyObj)
 
-    DOWNLOAD_OK: 1,
-    DOWNLOAD_FAIL: -1,
+var DOWNLOAD_OK = 1,
+    DOWNLOAD_FAIL = -1,
+    multiDownloadStatus = DOWNLOAD_OK,
+    fullRecordSuffix = 'record.json',
+    SLASH = '/';
 
-    SLASH: '/'
 
-    //isMac: /^darwin/.test(process.platform)
-    //isWin = /^win/.test(process.platform)
-};
-
-// ignore hidden files/dirs like .sync_data and full records when watching for changes
-constants.chokiWatcherIgnore = [/[\/\\]\./, '**/*' + constants.fullRecordSuffix];
-
-// default to ok.
-var multiDownloadStatus = constants.DOWNLOAD_OK;
+var isMac = /^darwin/.test(process.platform);
+//var isWin = /^win/.test(process.platform);
 
 var testsRunning = false;
 
 var chokiWatcher = false,
-    chokiWatcherReady = false;
-
+    chokiWatcherReady = false,
+    // ignore hidden files/dirs like .sync_data when watching for changes
+    chokiWatcherIgnore = /[\/\\]\./; // NOTE: anymatch (micromatch for globs) no longer works with ["**/.*"]
 
 var filesInQueueToDownload = 0,
     filesToPreLoad = {};
@@ -71,7 +64,7 @@ var filesInQueueToDownload = 0,
 // a list of FileRecord objects indexed by file path for easy access
 var fileRecords = {};
 
-// set to true to exit after a download is complete (avoids watcher starting)
+// set to true to exit after a dwd is complete (avoids watcher starting)
 var endApp = false;
 
 // ---------------------------------------------------
@@ -94,11 +87,18 @@ function init() {
         }
         configLoader.setConfigLocation(argv.config);
         config = configLoader.getConfig();
+        if(config.diff) {
+            myDiff.setDiffCommand(config.diff);
+        }
     } catch (e) {
         winston.error('Configuration error:'.red, e.message);
         exitApp();
     }
+    if (argv.debug) {
+        config.debug = true;
+    }
 
+    //config.debug = true;
     setupLogging();
 
     enrichConfig();
@@ -109,7 +109,7 @@ function init() {
 
     // Apply custom file watcher ignore rules
     if (config.ignoreFiles) {
-        constants.chokiWatcherIgnore = config.ignoreFiles;
+        chokiWatcherIgnore = config.ignoreFiles;
     }
 
     function start(upgradeBlocks) {
@@ -212,7 +212,7 @@ function exitApp(code) {
  */
 function enrichConfig() {
     // populate config with constants and depend vars
-    config._fullRecordSuffix = constants.fullRecordSuffix;
+    config._fullRecordSuffix = fullRecordSuffix;
 
     // support for 3rd party logging (eg, FileRecord, notify and Search)
     config._logger = logit;
@@ -243,6 +243,62 @@ function tableDefined(tableName) {
     return false;
 }
 
+function extractTableFromName(str) {
+    var table = '';
+    var start, end;
+
+    // this is the most complex case so handle it first
+    if (str.indexOf('uri=') >= 0) {
+        /*
+         * Example
+         * http://localhost:16008/nav_to.do?uri=%2Fsp_widget.do%3Fsys_id%3Df37aa302cb70020000f8d856634c9cfc%26sysparm_record_target%3Dsp_widget
+         *
+         * OR
+         *
+         * http://localhost:16008/nav_to.do?uri=sp_angular_provider.do?sys_id=06e836f0d722120023c84f80de6103a1"
+         *
+         */
+        // normalise the string
+        str = str.replace(/\%2F/g, '').replace(/\%3F/g, '');
+        start = str.replace('_list', '').split('.do');
+        end = start[1].split('uri=');
+        table = end.pop();
+
+    } else if (str.indexOf('.do') >= 0) {
+        /*
+         * Example
+         * http://localhost:16008/sp_widget.do?sys_id=c6545050ff223100ba13ffffffffffe8&sysparm_record_target=sp_widget
+         *
+         */
+        start = str.split('.do');
+        end = start[0].split('/');
+        table = end.pop();
+
+    } else {
+        /*
+         * Example
+         * sp_widget_c6545050ff223100ba13ffffffffffe8
+         */
+        var sys_id = extractSysIdFromName(str);
+        table = argv.search.replace('_' + sys_id, '');
+    }
+
+    return table;
+}
+
+/**
+ * Returns the last part of the string counting backwards from
+ * end to (end - num)
+ */
+function lastChars(s, num) {
+    var rev = reverse(s);
+    return reverse(rev.substring(0, num));
+}
+
+function reverse(s) {
+    return s.split('').reverse().join('');
+}
+
 function extractSysIdFromName(str) {
     var regEx = new RegExp("[a-z0-9]{32,}", "gi"),
         matches;
@@ -254,7 +310,11 @@ function extractSysIdFromName(str) {
 
     if (matches && matches.length > 0) {
         // assumes only one sys_id str
-        return matches[0];
+        var match = matches[0];
+        // let's make sure we didn't match to much crud at the start.
+        match = lastChars(match, 32);
+
+        return match;
     }
 
     return false;
@@ -307,11 +367,11 @@ function pushUpRecord(argv) {
 
         // do we have a valid file path?
         argv.push = FileRecordUtil.normalisePath(argv.push);
-        if (argv.push.indexOf(constants.SLASH) > 0) {
-            var parts = argv.push.split(constants.SLASH),
+        if (argv.push.indexOf(SLASH) > 0) {
+            var parts = argv.push.split(SLASH),
                 folder = parts[0],
                 file = parts[parts.length - 1],
-                filePath = getFirstRoot() + constants.SLASH + argv.push;
+                filePath = getFirstRoot() + SLASH + argv.push;
 
             logit.info('Will process file "%s" in folder "%s" with push path: %s', file, folder, filePath);
 
@@ -362,14 +422,14 @@ function pullDownRecord(argv) {
     if (isPath) {
         argv.pull = FileRecordUtil.normalisePath(argv.pull);
         // make sure there is a real path provided
-        isPath = argv.pull.indexOf(constants.SLASH) > 0;
+        isPath = argv.pull.indexOf(SLASH) > 0;
     }
 
     if (isPath) {
-        parts = argv.pull.split(constants.SLASH);
+        parts = argv.pull.split(SLASH);
         folder = parts[0];
         file = parts[parts.length - 1];
-        pullPath = getFirstRoot() + constants.SLASH + argv.pull;
+        pullPath = getFirstRoot() + SLASH + argv.pull;
         folderObj = getFolderConfig(folder);
     }
 
@@ -408,7 +468,7 @@ function pullDownRecord(argv) {
     if (query === '') {
         // a pull without a query makes no sense.
         logit.error('No valid pull query specified.');
-        exitApp(0);
+        process.exit(0);
         return;
     }
 
@@ -461,7 +521,7 @@ function startSearch(argv) {
         ignoreTableConfig: argv.ignoreTableConfig || false
     };
 
-    if(queryObj.restrictFields != false) {
+    if (queryObj.restrictFields !== false) {
         queryObj.restrictFields = queryObj.restrictFields.split(',');
     }
 
@@ -493,7 +553,7 @@ function startSearch(argv) {
             queryObj.ignoreTableConfig = true;
         }
 
-    // experiemental
+        // experiemental
     } else if (searchValue && argv.search.indexOf('.txt') > 0) {
         // TODO: try to process a file
 
@@ -504,15 +564,16 @@ function startSearch(argv) {
 
         return;
 
-    } else if(searchValue) {
-        // assume format is table_sys_id (eg. sys_script_fix_e9f4193347302200ff95502b9f9a7176)
+    } else if (searchValue) {
+        // format could be table_sys_id (eg. sys_script_fix_e9f4193347302200ff95502b9f9a7176)
+        // could also be a long url
 
         // try to guess from provided param
         var sys_id = extractSysIdFromName(argv.search);
         var table = '';
         if (sys_id) {
             // try to get table
-            table = argv.search.replace('_' + sys_id, '');
+            table = extractTableFromName(argv.search);
             if (table.length > 2 && table != sys_id) {
                 // real table!
                 queryObj.query = 'sys_id=' + sys_id;
@@ -619,24 +680,25 @@ function processFoundRecords(searchObj, queryObj, records) {
     for (var i in records) {
         var record = records[i],
             validData,
-            validResponse = typeof record.recordData != 'undefined';
+            validResponse = typeof record.recordData != 'undefined',
+            fileSystemSafeName = normaliseRecordName(record.recordName),
+            filePath = basePath + SLASH + record.folder + SLASH;
 
-        if (queryObj.ignoreTableConfig) {
+            if (queryObj.ignoreTableConfig) {
             // set default required options if not using config
             record.recordName = record.recordData.sys_id;
             record.folder = queryObj.table;
         }
-
         var fileSystemSafeName = normaliseRecordName(record.recordName),
-            filePath = basePath + constants.SLASH + record.folder + constants.SLASH,
+            filePath = basePath + SLASH + record.folder + SLASH,
             suffix = record.fieldSuffix,
             sys_id = '',
-            bestGuessName = filePath + ' .... ' + fileSystemSafeName;
+            bestGuessName = filePath + ' .... ' + fileSystemSafeName + '.' + suffix;
 
         if (validResponse) {
             sys_id = record.recordData.sys_id || record.sys_id;
         } else {
-
+            var bestGuessName = filePath + ' .... ' + fileSystemSafeName;
             // seems like protected records that are read-only hide certain fields from view
             logit.warn('Found but will ignore to protected record: ' + bestGuessName);
             totalErrors++;
@@ -644,13 +706,18 @@ function processFoundRecords(searchObj, queryObj, records) {
             continue;
         }
 
+
         // TODO : looks broken because locDB.fieldSuffix is undefined???
+        //        also broken if SN uses scss (sp_widget.css field is scss enabled)
+        //        work around for now is to configure folder definitions to save as ".css" files
         var isSCSSRecord = FileRecordUtil.isSCSS(record.recordName);
         // check that it is really a SCSS file and not a CSS file!
         if (suffix == 'scss' && !isSCSSRecord || suffix == 'css' && isSCSSRecord) {
             logit.info('Avoiding duplicate CSS/SCSS files: ' + bestGuessName);
             continue; // skip, avoid duplicates
         }
+
+
 
         if (config.ensureUniqueNames) {
             // TODO : these records will be <name>.sys_id.record.json but others are <name>_record.json
@@ -660,31 +727,37 @@ function processFoundRecords(searchObj, queryObj, records) {
         var fileName = fileSystemSafeName + '.' + suffix;
 
         if (record.subDir !== '') {
-            filePath += record.subDir + constants.SLASH;
+            filePath += record.subDir + SLASH;
         }
         filePath += fileName;
 
-        // ensure we have a valid file name
-        if (fileSystemSafeName.length === 0) {
-            totalErrors++;
-            failedFiles.push(filePath);
-            continue;
-        }
-
-        validData = record.recordData.length > 0 || record.recordData.sys_id;
-        if (validData) {
-            logit.info('File to create: ' + filePath);
+        //case it is a pull operation compare local with remote to decide if we wanna overwrite local file 
+        //or push it to the remote
+        if (argv.pull) {
+            send(filePath);
         } else {
-            logit.info('Found but will ignore due to no content: ' + filePath);
-            totalErrors++;
-            failedFiles.push(filePath);
-        }
+            // ensure we have a valid file name
+            if (fileSystemSafeName.length === 0) {
+                totalErrors++;
+                failedFiles.push(filePath);
+                continue;
+            }
 
-        if (queryObj.download) {
-            // don't save files of 0 bytes as this will confuse everyone
+            validData = record.recordData.length > 0 || record.recordData.sys_id;
             if (validData) {
-                totalFilesToSave++;
-                saveFoundFile(filePath, record);
+                logit.info('File to create: ' + filePath);
+            } else {
+                logit.info('Found but will ignore due to no content: ' + filePath);
+                totalErrors++;
+                failedFiles.push(filePath);
+            }
+
+            if (queryObj.download) {
+                // don't save files of 0 bytes as this will confuse everyone
+                if (validData) {
+                    totalFilesToSave++;
+                    saveFoundFile(filePath, record);
+                }
             }
         }
     }
@@ -799,15 +872,6 @@ function resyncExistingFiles() {
     });
 }
 
-
-function notifyUser(code, args) {
-    // depending on the notification system, we could flood the OS and get blocked by security
-    //   Eg. too many open files via terminal-notifier-pass.app launches)
-    if (notifyEnabled) {
-        notifyUserMsg(code, args);
-    }
-}
-
 function addConfigFiles() {
     var filesToGet = 0;
     // each root
@@ -820,6 +884,7 @@ function addConfigFiles() {
                 // each file to create
                 for (var file in root.preLoadList[folder]) {
                     var filePath = path.join(r, folder, root.preLoadList[folder][file]);
+
                     addToPreLoadList(filePath, {
                         filePath: filePath
                     });
@@ -836,6 +901,7 @@ function addToPreLoadList(filePath, options) {
         filePath: filePath
     };
     // only process if we don't already have it in the list
+    // todo: assumes all file names are unique!
     if (typeof filesToPreLoad[filePath] == 'undefined') {
         filesToPreLoad[filePath] = options;
         addFile(filePath);
@@ -873,7 +939,7 @@ function displayHelp() {
 function handleError(err, context) {
     logit.error(err);
     if (context) {
-        logit.error('  handleError context:', context);
+        logit.error('handleError context:', context);
     }
 }
 
@@ -909,9 +975,13 @@ function exportCurrentSetup(exportConfigPath) {
     for (var i in watchedFolders) {
         // remove sensitive data that may exist
         delete exportConfig.roots[watchedFolders[i]].auth;
+
+        // remove caching properties
+        delete exportConfig.roots[watchedFolders[i]].root;
+
         // overwrite remaining sensitive data
         exportConfig.roots[watchedFolders[i]].user = '<your user name>';
-        exportConfig.roots[watchedFolders[i]].pass = '<your password (which will be encrypted)>';
+        exportConfig.roots[watchedFolders[i]].pass = '<your password (which will become encrypted)>';
 
         exportConfig.roots[watchedFolders[i]].preLoadList = {};
     }
@@ -919,7 +989,7 @@ function exportCurrentSetup(exportConfigPath) {
     var chokiWatcher = chokidar.watch(watchedFolders, {
             persistent: true,
             // ignores use anymatch (https://github.com/es128/anymatch)
-            ignored: constants.chokiWatcherIgnore
+            ignored: chokiWatcherIgnore
         })
         .on('add', function (file, stats) {
             // add all files that have content..
@@ -930,13 +1000,14 @@ function exportCurrentSetup(exportConfigPath) {
                 var f = new FileRecord(config, file),
                     folder = f.getFolderName(),
                     fileName = f.getFileName(),
+                    exportPath = f.getFileSubDirPath(),
                     rootDir = f.getRoot();
 
                 // add to appropriate preLoadList folder array
                 if (!exportConfig.roots[rootDir].preLoadList[folder]) {
                     exportConfig.roots[rootDir].preLoadList[folder] = [];
                 }
-                exportConfig.roots[rootDir].preLoadList[folder].push(fileName);
+                exportConfig.roots[rootDir].preLoadList[folder].push(exportPath);
             }
         })
         .on('ready', function () {
@@ -968,10 +1039,10 @@ function queuedFile() {
     logit.info(('Files left in queue: ' + filesInQueueToDownload).redBG);
 
     // more than 2 files in the queue? Lets disable notify to avoid the ulimit issue
-    if (filesInQueueToDownload > 2 && notifyEnabled) {
-        notifyEnabled = false;
+    if (filesInQueueToDownload > 2 && notifyObj.enabled) {
+        notifyObj.enabled = false;
         // reset multi file download status to OK.
-        multiDownloadStatus = constants.DOWNLOAD_OK;
+        multiDownloadStatus = DOWNLOAD_OK;
     }
 }
 
@@ -985,14 +1056,18 @@ function decrementQueue() {
     if (filesInQueueToDownload === 0) {
 
         // re-enable notifications (notifications only disabled when multiple files in queue)
-        if (!notifyEnabled) {
-            notifyEnabled = true;
+        if (!notifyObj.enabled) {
+            notifyObj.enabled = true;
             // show one notification to represent if all files were downloaded or not
-            if (multiDownloadStatus == constants.DOWNLOAD_FAIL) {
-                logit.error('Some or all files failed to download'.red);
-                notifyUser(msgCodes.COMPLEX_ERROR);
+            if (multiDownloadStatus == DOWNLOAD_FAIL) {
+                logit.error('Files failed to download.'.red + ' See list below for details.');
+                // TODO, show what files failed
+                logit.info(listOfFailedFiles);
+                // reset list
+                listOfFailedFiles = [];
+                notifyObj.msg(notifyObj.codes.COMPLEX_ERROR);
             } else {
-                notifyUser(msgCodes.ALL_DOWNLOADS_COMPLETE);
+                notifyObj.msg(notifyObj.codes.ALL_DOWNLOADS_COMPLETE);
             }
         }
 
@@ -1014,7 +1089,7 @@ function decrementQueue() {
 
 function validResponse(err, obj, db, map, fileRecord) {
     if (err) {
-        notifyUser(msgCodes.COMPLEX_ERROR, {
+        notifyObj.msg(notifyObj.codes.COMPLEX_ERROR, {
             open: fileRecord.getRecordUrl()
         });
         handleError(err, db);
@@ -1025,7 +1100,7 @@ function validResponse(err, obj, db, map, fileRecord) {
         logit.info('No records found:'.yellow, db);
         fileRecord.addError("No records found");
 
-        notifyUser(msgCodes.RECORD_NOT_FOUND, {
+        notifyObj.msg(notifyObj.codes.RECORD_NOT_FOUND, {
             table: map.table,
             file: map.keyValue,
             field: map.field,
@@ -1039,7 +1114,12 @@ function validResponse(err, obj, db, map, fileRecord) {
 
 function receive(file, allDoneCallBack) {
     var map = fileRecords[file].getSyncMap(),
-        fileMeta = fileRecords[file].getMeta();
+        fileMeta = fileRecords[file].getMeta(),
+        // the sys_id either comes from the meta (if already exists) or the file name or not at all
+        sys_id = fileMeta.sys_id || extractSysIdFromName(map.keyValue) || false,
+        // map.keyValue could be like "insert_problem.d5e561f3c0a8000901a883289848f88d"
+        // this is a combination of sys_id and name. Use sys_id from name when possible and ignore the query
+        query = sys_id ? '' : map.key + '=' + map.keyValue;
 
     logit.debug('Adding:', {
         file: file,
@@ -1056,12 +1136,13 @@ function receive(file, allDoneCallBack) {
     var db = {
         table: map.table,
         field: map.field,
-        query: map.key + '=' + map.keyValue,
-        sys_id: fileMeta.sys_id || false
+        query: query,
+        sys_id: sys_id
     };
 
     snc.table(db.table).getRecords(db, function (err, obj) {
         var isValid = validResponse(err, obj, db, map, fileRecords[file]);
+
         if (!isValid) {
             decrementQueue();
             allDoneCallBack(false);
@@ -1073,12 +1154,13 @@ function receive(file, allDoneCallBack) {
             objName = record.name; // TODO : use objName instead of file var.
 
 
+
         // legacy concept (still needed??... TODO: don't allow creation of 0 byte files!)
         if (record[db.field].length < 1) {
             logit.warn('**WARNING : this record is 0 bytes'.red);
             fileRecords[file].addError('This file was downloaded as 0 bytes. Ignoring sync. Restart FileSync and then make changes to upload.');
 
-            notifyUser(msgCodes.RECEIVED_FILE_0_BYTES, {
+            notifyObj.msg(notifyObj.codes.RECEIVED_FILE_0_BYTES, {
                 table: map.table,
                 file: map.keyValue,
                 field: map.field,
@@ -1106,7 +1188,7 @@ function receive(file, allDoneCallBack) {
             }
 
             if (!complete) {
-                notifyUser(msgCodes.RECEIVED_FILE_ERROR, {
+                notifyObj.msg(notifyObj.codes.RECEIVED_FILE_ERROR, {
                     table: map.table,
                     file: map.keyValue,
                     field: map.field,
@@ -1123,7 +1205,7 @@ function receive(file, allDoneCallBack) {
                 // write out hash for collision detection
                 fileRecords[file].saveHash(record[db.field], function (saved) {
                     if (saved) {
-                        notifyUser(msgCodes.RECEIVED_FILE, {
+                        notifyObj.msg(notifyObj.codes.RECEIVED_FILE, {
                             table: map.table,
                             file: map.keyValue,
                             field: map.field,
@@ -1133,7 +1215,7 @@ function receive(file, allDoneCallBack) {
                         logit.info('Saved:'.green, file);
                     } else {
                         logit.error('SERIOUS ERROR: FAILED TO SAVE META FILE FOR SYNC RESOLUTION.'.red);
-                        notifyUser(msgCodes.COMPLEX_ERROR);
+                        notifyObj.msg(notifyObj.codes.COMPLEX_ERROR);
                     }
 
                     decrementQueue();
@@ -1195,7 +1277,7 @@ function writeFile(file, data, callback) {
 function readFile(file, callback) {
     fs.readFile(file, 'utf8', function (err, data) {
         if (err) {
-            notifyUser(msgCodes.COMPLEX_ERROR);
+            notifyObj.msg(notifyObj.codes.COMPLEX_ERROR);
             logit.error(('Error trying to read file: '.red) + file);
             handleError(err, {
                 file: file
@@ -1203,34 +1285,6 @@ function readFile(file, callback) {
         } else {
             callback(data);
         }
-    });
-}
-
-/**
- * push some data to overwrite an instance record
- * @param snc {snc-client}
- * @param db {object} - the data to use in the post...
- * var db = {
-            table: map.table,
-            field: map.field,
-            query: map.key + '=' + map.keyValue,
-            sys_id: fileMeta.sys_id || false,
-            payload: {},
-        };
-        // payload for a record update (many fields and values can be set)
-        db.payload[db.field] = data;
-
- * @param callback {function}
- */
-function push(snc, db, callback) {
-    snc.table(db.table).update(db, function (err, obj) {
-        if (err) {
-            handleError(err, db);
-            callback(false);
-            return;
-        }
-
-        callback(true);
     });
 }
 
@@ -1242,6 +1296,18 @@ function send(file, callback) {
             logit.error(('Could not send file:  ' + file).red);
         }
     };
+
+    checkConflicts(file, callback);
+}
+
+
+/**
+ * Check if there are conflicts between local and remote script.
+ * @param  {String}   file     local file
+ * @param  {Function} callback 
+ * 
+ */
+function checkConflicts(file, callback) {
     readFile(file, function (data) {
 
         var map = fileRecords[file].getSyncMap(),
@@ -1258,58 +1324,66 @@ function send(file, callback) {
         // payload for a record update (many fields and values can be set)
         db.payload[db.field] = data;
 
+        var options = {
+                "db": db,
+                "snc": snc,
+                "map": map,
+                "callback": callback
+            },
+            choices,
+            subs = ['>>>>', '==== HEAD', '==== Local'];
 
         // only allow an update if the instance is still in sync with the local env.
         instanceInSync(snc, db, map, file, data, function (err, obj) {
 
             if (!obj.inSync) {
-                notifyUser(msgCodes.NOT_IN_SYNC, {
+                notifyObj.msg(notifyObj.codes.CONFLICTS_DETECTED, {
                     table: map.table,
                     file: map.keyValue,
                     field: map.field,
                     open: fileRecords[file].getRecordUrl()
                 });
-                logit.warn('Instance record is not in sync with local env ("%s").', map.keyValue);
-                callback(false);
-                return;
+
+                if (new RegExp(subs.join("|")).test(data)) {
+                    logit.error('could not process this action!'.red);
+                    logit.info('Please make sure all conflicts in ("%s") are resolved!.'.red, map.keyValue);
+                    callback(false);
+                    return;
+                }
+
+                if (argv.push) {
+                    choices = [
+                        'overwrite file in ServiceNow',
+                        'resolve conflicts',
+                        'abort this action'
+                        ];
+                } else if (argv.pull) {
+                    choices = [
+                        'overwrite local file',
+                        'resolve conflicts',
+                        'abort this action'
+                        ];
+                }
+                else {
+                    choices = [
+                        'overwrite file in ServiceNow',
+                        'overwrite local file',
+                        'resolve conflicts',
+                        'abort this action'
+                    ];
+                }
+
+                inquire.inquire(options, file, choices, obj, fileRecords);
             }
             if (obj.noPushNeeded) {
-                logit.info('Local has no changes or remote in sync; no need for push/send.');
+                logit.info('Local has no changes or remote in sync; no need for push/pull.');
                 callback(true);
                 return;
             }
-
-
-            logit.info('Updating instance version ("%s").', map.keyValue);
-            push(snc, db, function (complete) {
-                if (complete) {
-                    // update hash for collision detection
-                    fileRecords[file].saveHash(data, function (saved) {
-                        if (saved) {
-                            notifyUser(msgCodes.UPLOAD_COMPLETE, {
-                                file: map.keyValue,
-                                open: fileRecords[file].getRecordUrl()
-                            });
-                            logit.info('Updated instance version: %s.%s : query: %s', db.table, db.field, db.query);
-                            logit.debug('Updated instance version:', db);
-
-                        } else {
-                            notifyUser(msgCodes.COMPLEX_ERROR);
-                        }
-                        callback(saved);
-                    });
-                } else {
-                    notifyUser(msgCodes.UPLOAD_ERROR, {
-                        file: map.keyValue,
-                        open: fileRecords[file].getRecordUrl()
-                    });
-                    callback(complete);
-                }
-
-            });
         });
     });
 }
+
 
 function addFile(file, callback) {
 
@@ -1318,8 +1392,9 @@ function addFile(file, callback) {
     // default callback
     callback = callback || function (complete) {
         if (!complete) {
-            logit.info(('Could not add file:  ' + file).red);
-            multiDownloadStatus = constants.DOWNLOAD_FAIL;
+            logit.warn(('Could not add file:  ' + file));
+            listOfFailedFiles.push(file);
+            multiDownloadStatus = DOWNLOAD_FAIL;
         }
     };
 
@@ -1397,17 +1472,6 @@ function trackFile(file) {
  */
 function instanceInSync(snc, db, map, file, newData, callback) {
 
-    // first lets really check if we have a change
-    var previousLocalVersionHash = fileRecords[file].getLocalHash();
-    var newDataHash = makeHash(newData);
-    if (previousLocalVersionHash == newDataHash) {
-        callback(false, {
-            inSync: true,
-            noPushNeeded: true
-        });
-        return; // no changes
-    }
-
     logit.info('Comparing remote version with previous local version...');
 
     snc.table(db.table).getRecords(db, function (err, obj) {
@@ -1424,27 +1488,31 @@ function instanceInSync(snc, db, map, file, newData, callback) {
         logit.debug('Received:'.green, db);
 
         var remoteVersion = obj.records[0][db.field],
-            remoteHash = makeHash(remoteVersion);
+            remoteHash = makeHash(remoteVersion),
+            previousLocalVersionHash = fileRecords[file].getLocalHash(),
+            newDataHash = makeHash(newData);
 
         // CASE 1. Records local and remote are the same
         if (newDataHash == remoteHash) {
             // handle the scenario where the remote version was changed to match the local version.
             // when this happens update the local hash as there would be no collision here (and nothing to push!)
-            obj.inSync = true;
-            obj.noPushNeeded = true;
-            // update local hash.
-            fileRecords[file].saveHash(newData, function (saved) {
-                if (!saved) {
-                    logit.error('Failed to update hash file for %s', file);
-                }
+            callback(false, {
+                inSync: true,
+                noPushNeeded: true
             });
+            return; // no changes
 
             // CASE 2. the last local downloaded version matches the server version (stanard collision test scenario)
-        } else if (remoteHash == previousLocalVersionHash) {
+            // and no changes have been made on the local file
+        } else if (remoteHash == previousLocalVersionHash && newDataHash === remoteHash) {
             obj.inSync = true;
+            //CASE 3, the remote version and the local version not in sync
+        } else if ( newDataHash !== remoteHash) {
+            // case no local change but server changes
+            // case local changes but server remains intact
+            // case both local and server change
+            callback(err, obj);
         }
-        // CASE 3, the remote version changed since we last downloaded it = not in sync
-        callback(err, obj);
     });
 }
 
@@ -1459,8 +1527,7 @@ function watchFolders() {
     chokiWatcher = chokidar.watch(watchedFolders, {
             persistent: true,
             // ignores use anymatch (https://github.com/es128/anymatch)
-            ignored: constants.chokiWatcherIgnore,
-
+            ignored: chokiWatcherIgnore,
             // performance hit?
             alwaysStat: true
         })
@@ -1481,10 +1548,16 @@ function watchFolders() {
 
                         addFile(file);
                     }
+                } else {
+                    // file could be invalid (eg, folder mapping missing)
+                    logit.warn('File cannot be tracked because it is not valid: %s', file);
                 }
 
             } else {
-                trackFile(file);
+                if (!trackFile(file)) {
+                    // file could be invalid (eg, folder mapping missing)
+                    logit.warn('File cannot be tracked because it is not valid: %s', file);
+                }
             }
         })
         .on('change', onChange)
@@ -1560,6 +1633,8 @@ function setupLogging() {
         logger.level = 'debug';
     }
 
+    // support for 3rd party logging (eg, FileRecord, notify and Search)
+    config._logger = logit;
 }
 
 
