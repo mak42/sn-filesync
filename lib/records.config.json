@@ -141,7 +141,7 @@
         },
         "sp_widgets": {
             "table": "sp_widget",
-            "key": "name",
+            "key": "id",
             "fields": {
                 "client.js": "client_script",
                 "demo.js": "demo_data",

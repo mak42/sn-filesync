@@ -1549,6 +1549,7 @@ function watchFolders() {
     var watchedFolders = Object.keys(config.roots);
     chokiWatcher = chokidar.watch(watchedFolders, {
             persistent: true,
+            awaitWriteFinish: true,
             // ignores use anymatch (https://github.com/es128/anymatch)
             ignored: constants.chokiWatcherIgnore,
 
